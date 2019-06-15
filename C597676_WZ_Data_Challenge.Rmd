@@ -1,0 +1,687 @@
+---
+title: "Data Challenge"
+author: "Workday ID (C597676) WZ"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: true
+    theme: united
+  pdf_document:
+    toc: yes
+    toc_depth: '2'
+---
+
+
+```{r setup, include=FALSE}
+library(readr)
+library(data.table)
+library(lubridate)
+library(tidyr)
+library(ggplot2)
+library(dplyr)
+library(gridExtra)
+library(lubridate)
+library(leaflet)
+library(kableExtra)
+library(randomForest)
+library(xgboost)
+library(plotly)
+library(car)
+library(knitr)
+knitr::opts_chunk$set(warning=FALSE, message=FALSE,comment = "",fig.width=8, fig.height=5,fig.align="center")
+```
+
+# Load Data and Report dataset size (Q1)
+
+This project is for code challenge for data scientist internship postion at Capital One. The data was collected by the New York City Taxi and Limousine commission about "Green" Taxis in September, 2015. Green Taxis (as opposed to yellow ones) are taxis that are not allowed to pick up passengers inside of the densely populated areas of Manhattan. The data could be found [`here`](http://www.nyc.gov/html/tlc/html/about/trip_record_data.shtml).
+
+
+```{r, message=F, warning=F, error=F,results="asis",fig.width=16, fig.height=6,fig.align="center"}
+
+taxi <- fread("/Users/wenhuizeng/Library/Mobile Documents/com~apple~CloudDocs/job application/job interview preparation/Capital One/data_challenge 2019/green_tripdata_2015-09.csv")
+
+#Report how many rows and columns of data you have loaded
+a <- dim(taxi)[1]
+b <- dim(taxi)[2]
+```
+
+## Conclusion
+
+The data has `r a` rows and `r b` columns.
+
+# Trip Distance Distribution (Q2)
+
+*Question Statement: Plot a histogram of the number of the trip distance (“Trip Distance”). Report any structure you find and any hypotheses you have about that structure.*
+
+Because I will condut a lot of visualizations. So I just built visualization functions.
+
+```{r}
+hist.fun <-function(data,xvar) { 
+  data %>% ggplot(aes(x=get(xvar)))+ 
+    geom_histogram(bins=50,colour="black", fill="#56B4E9")+
+    theme_bw()+
+    labs(x=substitute(xvar))+
+  theme(axis.title=element_text(size=16,face="bold"),
+        axis.text.x =element_text(size=16,face="bold"),
+        plot.title = element_text(size=12,hjust = 0.5,face="bold"))
+}
+
+box.plot.fun <- function(data,xvar,yvar){
+ data %>% ggplot(aes(x=get(xvar),y=get(yvar)))+
+    geom_boxplot(fill="#56B4E9")+
+    theme_bw()+
+    labs(x=substitute(xvar),y=substitute(yvar))+
+    theme(text = element_text(size=10),
+          axis.text.x =element_text(size=10,angle=90,hjust = 0.5,vjust=0.5),
+          axis.title=element_text(size=12,face="bold"),
+          legend.position = "bottom",
+          legend.text=element_text(size=12),
+          plot.title = element_text(size=12,hjust = 0.5)) 
+}
+
+line.plot.fun <- function(data,xvar,yvar){
+  data %>% ggplot(aes(x=get(xvar),y=get(yvar),group=1))+
+    theme_bw()+
+    geom_line(color="red",size=1)+
+    labs(x=substitute(xvar),y=substitute(yvar))+
+    theme(text = element_text(size=10),
+          axis.text.x =element_text(size=10,angle=45,hjust = 0.5,vjust=0.5),
+          axis.title=element_text(size=12,face="bold"),
+          legend.position = "bottom",
+          legend.text=element_text(size=10),
+          plot.title = element_text(size=12,hjust = 0.5))
+}
+
+
+```
+
+
+```{r}
+a <- summary(taxi$Trip_distance)
+b <- range(taxi$Trip_distance)
+c <- nrow(taxi[taxi$Trip_distance==0,])/nrow(taxi)*100
+qtl <- quantile(taxi$Trip_distance,c(0.025,0.9999))
+taxi_clean <- taxi[taxi$Trip_distance>0.5 &taxi$Trip_distance < 100,]
+p1 <- hist.fun(taxi,'Trip_distance')+ggtitle("Trip Distance Distribution Original Plot")
+p2 <- hist.fun(taxi_clean,'Trip_distance')+ggtitle("Trip Distance Distribution with Cleaned Data")
+grid.arrange(p1, p2,nrow=1)
+```
+
+## Conclusion
+
+Before I plotted the distribution, intuitively thinking, the distribution of the trip distiance was more likely to be right skewed. Because most people will choose taxi for short distiance than longer distance. If more than one hour, people may think of driving or take public transportation. 
+
+The original histogram indicates that the distribution of the trip distance is highly affected by long distance trips and there are lots of 0 mile about `r c` percentage. The value ranged from `r b[1]` to `r b[2]` with a mean of `r a[3]` and median `r a[4]`. The median is less than mean which proved my hypothesis. 
+
+I removed distance below 0.5 mile and above 60 miles since these observations are more likely due to data error. The histogram was still right skewed and agreed with the my hypothesis. 
+
+# Trip Distance Distribution of Day (Q3)
+
+## Report mean and median trip distance grouped by hour of day.(Q3.1)
+
+```{r}  
+taxi_clean$Pickup_time <- ymd_hms(taxi_clean$lpep_pickup_datetime)
+taxi_clean$hour<-as.factor(hour(taxi_clean$Pickup_time))
+
+
+p1 <- taxi_clean %>% group_by(hour) %>% summarise(mean_distance=mean(Trip_distance),median_distance=median(Trip_distance),count=n()) %>%
+ ggplot()+geom_line(aes(x=hour,y=mean_distance,group=1),color="red",size=1)+
+geom_line(aes(x=hour,y=median_distance,group=1),color="blue",size=1)+
+  theme_bw()+ggtitle("Mean and Median trip distance distribution during the day")
+
+taxi_clean$weekday <- as.factor(wday(taxi_clean$Pickup_time,label = T))
+p2 <- taxi_clean %>% group_by(hour,weekday) %>% summarise(mean_distance=mean(Trip_distance),median_distance=median(Trip_distance),count=n()) %>%
+  ggplot()+
+  geom_line(aes(x=hour,y=median_distance,group=weekday,color=weekday),size=1)+
+  theme_bw()+ggtitle("Median trip distance distribution during the day across a Week")
+
+grid.arrange(p1, p2, ncol=2)
+
+```
+
+### Conclusion
+
+I used line plot to show the mean and median trip distance in a day. The pick up hour was used to estimate the hour of trip. After removed the outliers, the mean and median trip distance during a day show the same pattern. The distance remains steady from  12:00 am to 3 am. Then it increases till 5 am and decreases to original level and remains constant. There is a small arising after 6:00 PM. The pattern was similar across the whole week. But weekends have less traffic compared to weekdays.
+
+## Airport Related Trip (Q3.2) 
+
+*We’d like to get a rough sense of identifying trips that originate or terminate at one of the NYC area airports. Can you provide a count of how many transactions fit this criteria, the average fare, and any other interesting characteristics of these trips.*
+
+### Mean trip distance and mean fare amount using rough estimate   
+
+```{r}
+taxi_clean$airport <- as.character(ifelse(taxi_clean$RateCodeID %in% c(2,3),"Yes","No"))
+taxi_clean.1 <- taxi_clean[taxi_clean$Fare_amount>0,]
+taxi_clean.1 %>% group_by(airport) %>% 
+  summarise(`number of trips`=n(),mean_fare= round(mean(Fare_amount),2),mean_distance=round(mean(Trip_distance),2)) %>%
+  kable(booktabs = T,align = "c",caption = "Trip Fare among Airport Trip VS Not Airport Trip ") %>%
+kable_styling(bootstrap_options = c("striped"),full_width = F,position = "center")
+```
+
+### Number of Trips among Airport and Non Airport Route During a Day
+
+```{r}
+p1 <- taxi_clean.1 %>% group_by(hour,airport) %>% summarise(`number of trip`=n()) %>%
+  filter(airport=="Yes") %>%
+  line.plot.fun("hour","number of trip")+ggtitle("Number of airport trip varied in a day")
+
+p2 <- taxi_clean.1 %>% group_by(hour,airport) %>% summarise(`number of trip`=n()) %>%
+  filter(airport=="No") %>% 
+  line.plot.fun("hour","number of trip")+
+  ggtitle("Number of non-airport trip varied in a day")
+
+grid.arrange(p1,p2)
+```
+
+### Number of Trips among Airport and Non Airport Route During a Week
+
+```{r}
+p <- taxi_clean.1 %>% group_by(weekday,airport) %>% summarise(`number of trip`=n()) %>% 
+  ungroup() %>% group_by(airport) %>% mutate(Percent=`number of trip`/sum(`number of trip`)) %>%
+  ggplot(aes(x=weekday,fill=airport,y=Percent))+
+  geom_bar(stat = "identity",position = "dodge")+theme_bw()+ggtitle("Number of airport trip varied in a week")+labs(y="Percentage of Number of Trips")
+ggplotly(p)
+
+```
+
+### Conclusion
+
+For efficiency and rough estimate, I use the variable RateCodeID as an indicator variable to estimate whether the trip is airport area or non airport area. Because there are three major aiports. One is John F Kennedy Interntional Airport near the JFK and the other is Newark Liberty International Airport near Newark, and LaGuardia Airport. For the trip with RateCodeID equals 2 or 3 are airport trip. The rest are non airport area. 
+
+The average fare for the airport related trip is 55 which is more than four times compared to non airport trip. The average distance of the airport trip is 17 miles which is more than fives times compared to non airport trip. However, airport trip is only took 2% of the total trip. One more interesting finding is the number of airport trip is gradually increased from 2 am and remained till 12 pm and peaked at 3 pm. After 3 pm, the number begins decraesing. Between 10 pm to 2 am, the number of trip is below 50. In additional to hour of a day, I also investigated the number of trips in a week between airport vs non-airport. For the non-airport trip, there are more flights on Sunday and Saturday and less flights on Monday and Thursday. As for the airport trip, there are more flights on Friday and the numbers are not varied a lot. 
+
+### GIS way of identifying the airport vs non-airport trip
+
+```{r}
+summary(taxi_clean$Pickup_latitude)
+summary(taxi_clean$Pickup_longitude)
+summary(taxi_clean$Dropoff_latitude)
+summary(taxi_clean$Dropoff_longitude)
+
+taxi_clean.2 <- taxi_clean.1 %>% filter(Pickup_latitude!=0 &Pickup_longitude!=0 & Dropoff_longitude!=0 & Dropoff_latitude!=0)
+
+leaflet() %>%
+  addTiles() %>% 
+  addMarkers(lng=-73.7781, lat=40.6413111,popup="JFK airport") %>%
+  addRectangles(lng1=-73.8400, lat1=40.62131,
+                lng2=-73.7581, lat2=40.67131,
+                fillColor = "transparent") %>%
+  addMarkers(lng=-73.8840, lat=40.7769,
+             popup="Laguardia airport") %>%
+  addRectangles(
+    lng1=-73.8640, lat1=40.7669,
+    lng2=-73.9040, lat2=40.7869,
+    fillColor = "transparent") %>%
+  addMarkers(lng=-74.1845, lat=40.6895,
+                  popup="Newark Liberty International Airport ") %>%
+  addRectangles(
+    lng1=-74.2145, lat1=40.7195,
+    lng2=-74.1545, lat2=40.6595,
+    fillColor = "transparent") 
+
+taxi_clean.2$JFK <- ifelse((taxi_clean.2$Pickup_longitude > -73.8400 & taxi_clean.2$Pickup_longitude < -73.7581 & taxi_clean.2$Pickup_latitude > 40.62131 & taxi_clean.2$Pickup_latitude < 40.67131)|(taxi_clean.2$Dropoff_longitude > -73.8400 & taxi_clean.2$Dropoff_longitude < -73.7581 & taxi_clean.2$Dropoff_latitude > 40.62131 & taxi_clean.2$Dropoff_latitude < 40.67131),1,0)
+
+
+taxi_clean.2$Laguardia <- ifelse((taxi_clean.2$Pickup_longitude > -73.9040 & taxi_clean.2$Pickup_longitude < -73.8640 & taxi_clean.2$Pickup_latitude > 40.7669 & taxi_clean.2$Pickup_latitude < 40.7869)|(taxi_clean.2$Dropoff_longitude > -73.9040 & taxi_clean.2$Dropoff_longitude < -73.8640 & taxi_clean.2$Dropoff_latitude > 40.7669 & taxi_clean.2$Dropoff_latitude < 40.7869),1,0)
+
+
+taxi_clean.2$Newark <- ifelse((taxi_clean.2$Pickup_longitude > -74.2145 & taxi_clean.2$Pickup_longitude < -74.1545 & taxi_clean.2$Pickup_latitude > 40.6595 & taxi_clean.2$Pickup_latitude < 40.7195)|(taxi_clean.2$Dropoff_longitude > -74.2145 & taxi_clean.2$Dropoff_longitude < -74.1545 & taxi_clean.2$Dropoff_latitude > 40.62131 & taxi_clean.2$Dropoff_latitude < 40.67131),1,0)
+
+taxi_clean.2$airport_GIS <- as.factor(ifelse(taxi_clean.2$JFK==1 | taxi_clean.2$Laguardia==1 |taxi_clean.2$Newark==1,"Yes","No"))
+```
+
+### Number of Trips, Mean fare and mean distance among airport vs non-airport (GIS)
+
+```{r}
+taxi_clean.2 %>% group_by(airport_GIS) %>% 
+  summarise(`number of trips`=n(),mean_fare=round(mean(Fare_amount),2),mean_distance=round(mean(Trip_distance),2)) %>% kable(booktabs = T,align = "c",caption = "Trip Fare among Airport Trip VS Not Airport Trip using GIS approximate") %>%
+kable_styling(bootstrap_options = c("striped"),full_width = F,position = "center")
+```
+
+### Number of Trips among Airport and Non Airport Route During a day
+
+```{r}
+p1 <- taxi_clean.2 %>% group_by(hour,airport_GIS) %>% summarise(`number of trip`=n()) %>%
+  filter(airport_GIS=="Yes") %>%
+  line.plot.fun("hour","number of trip")+ggtitle("Number of airport trip varied in a day")
+
+p2 <- taxi_clean.2 %>% group_by(hour,airport_GIS) %>% summarise(`number of trip`=n()) %>%
+  filter(airport_GIS=="No") %>% 
+  line.plot.fun("hour","number of trip")+
+  ggtitle("Number of non-airport trip varied in a day")
+
+grid.arrange(p1,p2)
+```
+
+### Number of Trips among Airport and Non Airport Route During a Week
+
+```{r}
+
+p1 <- taxi_clean.2 %>% group_by(weekday,airport_GIS) %>% summarise(`number of trip`=n()) %>% 
+  ungroup() %>% group_by(airport_GIS) %>% mutate(Percent=`number of trip`/sum(`number of trip`)) %>%ggplot(aes(x=weekday,fill=airport_GIS,y=Percent))+
+  geom_bar(stat = "identity",position = "dodge")+theme_bw()+ggtitle("Percentage of airport trips  varied in a week GIS Estimation")+labs(y="Percentage of Number of Trips")
+ggplotly(p1)
+
+```
+
+### Conclusion
+
+Compared with the rough estimate, the GIS estimate shows similiar pattern between airport and non-airport trip. As for the airport trip, there are more trips on Tuesday and Saturday. For the variation in a day, the GIS estimation shows similar pattern with the rough estimation. However, they are different on the airport trip. GIS esimation has a broader peak than the rough estimation, although both of them have two peaks.
+
+# Tip percentage and Predictive Model (Q4)
+
+*1) Build a derived variable for tip as a percentage of the total fare.*
+
+*2) Build a predictive model for tip as a percentage of the total fare. Use as much of the data as you like (or all of it). Provide an estimate of performance using an appropriate sample, and show your work.*
+
+## Outlier Removal
+
+```{r}
+taxi_clean.2 %>% group_by(Payment_type) %>% summarise(mean=mean(Tip_amount),count=n()) %>% kable(booktabs = T,align = "c",caption = "Average Fare across Different Payment Type") %>%
+kable_styling(bootstrap_options = c("striped"),full_width = F,position = "center")
+
+taxi_clean.2$drop_time <- ymd_hms(taxi_clean.2$Lpep_dropoff_datetime)
+taxi_clean.2$t_diff<-difftime(taxi_clean.2$drop_time,taxi_clean.2$Pickup_time,units = "hours")
+taxi_clean.2$t_diff<-as.numeric(taxi_clean.2$t_diff)
+taxi_clean.2$speed <- taxi_clean.2$Trip_distance/taxi_clean.2$t_diff
+
+taxi_clean.2$tip_pct <- taxi_clean.2$Tip_amount/taxi_clean.2$Fare_amount
+
+taxi_clean.3 <- taxi_clean.2 %>% filter(Payment_type==1 & Fare_amount>2.5 & Passenger_count > 0 & tip_pct < 0.5 & speed < 70 & t_diff < 1.5)
+
+taxi_clean.3$tip_YN <- as.factor(ifelse(taxi_clean.3$tip_pct==0,"No","Yes"))
+```
+
+1) Frome the table, the average tip amount for payment type credit care is greater than 0. As for cash, although there is about 50% paid  by cash but the averge recorded tip is close to 0. If we include these type of payment into modeling building it will give a great bias. So only trip that paid by credit card will be the target data set. 
+
+2) The total amount have to be greater than 2.5 since the starting price is 2.5. The price information could be found in [link](http://home.nyc.gov/html/tlc/html/passenger/taxicab_rate.shtml)
+
+3) It was unusual that the number of passenger is 0. It is highly due to data error, so these observations will be excluded from the analysis.
+
+4) I also excluded the tip percentage more than 50% since it is very unusual. Also, the limit speed of New York is usually 55. In here we set 70 as the upper limit. There is no lower limit for speed since the traffic of NY is really bad. I also removed the trip duration is more than 90 minutes, since it is rarely happen.   
+
+4) After we remove the outlier, the distribution of the tip amount percentage ranged from 0 to 20 which is more reasonable. The 3rd Quantitle is around 17 percentage which sounds reasonable. 
+
+## Exploratory Analysis and Feature Engineering
+
+**Tip Percentage**
+
+```{r}
+hist.fun(taxi_clean.3,"tip_pct")
+summary(taxi_clean.3$tip_pct)
+```
+
+The tip percentage has lots of zeros and the non-zero ones follows approximate normal distribution. **So all the exploratory analysis will look at trip with tips and trip without tip. The final prediction will use two-stage also called hurdle model that first predict if the passenger will pay the tip. For passenger who will pay, the algorithm will return a tip percentage.** 
+
+**Drop off and Pick up Location (sample data)**
+
+It could be seen that most drop off and pick up around Manhattan community and JFK airport. Due to computer power, I can't visualize all the data point. 
+
+```{r}
+taxi_clean.3[sample(nrow(taxi_clean.3), 10000), ]%>% leaflet() %>%
+  addTiles() %>%
+  addCircles(lng=~Pickup_longitude, lat=~Pickup_latitude,popup="Pickup",color = "red") 
+
+taxi_clean.3[sample(nrow(taxi_clean.3), 10000), ]%>% leaflet() %>%
+  addTiles() %>%  addCircles(lng=~Dropoff_longitude, lat=~Dropoff_latitude,popup="drop off",color = "green") 
+
+```
+
+
+**VendorID**
+
+```{r}
+qdiff <- function(x,qtl) {
+  the_quantiles <- quantile(x,qtl)
+  return(the_quantiles)
+}
+
+taxi_clean.3$VendorID<- as.factor(taxi_clean.3$VendorID)
+table(Vendor_ID=taxi_clean.3$VendorID,Pay_tip=taxi_clean.3$tip_YN)
+
+taxi_clean.3[taxi_clean.3$tip_YN=="Yes",] %>% group_by(VendorID) %>% summarise(mean_tippct=mean(tip_pct),median_tippct=median(tip_pct),count=n(),                                                 quant_1=qdiff(tip_pct,0.25), quant_2=qdiff(tip_pct,0.75)) %>% kable(booktabs = T,align = "c",caption = "Tip percentage among different vendors ") %>%
+kable_styling(bootstrap_options = c("striped"),full_width = F,position = "center")
+
+```
+
+It seems like there is not too much variation among different vendors. The summary table also proved this. There is less than 1% difference between mean, median both among tips trip versus non-tip trip. 
+
+**number of passenger**
+
+```{r}
+taxi_clean.3$Passenger_count<- as.factor(taxi_clean.3$Passenger_count)
+
+p1 <- taxi_clean.3[taxi_clean.3$tip_YN=="Yes",] %>% box.plot.fun("Passenger_count","tip_pct")
+
+taxi_clean.3$num_passenger <- as.factor(ifelse(as.numeric(taxi_clean.3$Passenger_count)<3,"1~3","4~8"))
+p2 <- taxi_clean.3[taxi_clean.3$tip_YN=="Yes",] %>% box.plot.fun("num_passenger","tip_pct")
+grid.arrange(p1,p2,nrow=1)
+```
+
+I recoded the number of passenger into two categories. One is ranging from 1 to 3, The other is 4 to 8. After recoding, there is less than 1% variation among two categories for the tip trip. 
+
+**Trip_type**
+
+```{r}
+taxi_clean.3$Trip_type <- as.factor(taxi_clean.3$Trip_type)
+table(taxi_clean.3$tip_YN,taxi_clean.3$Trip_type)
+box.plot.fun(taxi_clean.3[taxi_clean.3$tip_YN=="Yes",],"Trip_type","tip_pct")
+
+taxi_clean.3[taxi_clean.3$tip_pct!=0,] %>% group_by(Trip_type) %>% summarise(trip_type_median=median(tip_pct), trip_type_mean=mean(tip_pct))
+
+taxi_clean.3 %>% group_by(Trip_type) %>% summarise(trip_type_median=median(tip_pct), trip_type_mean=mean(tip_pct))
+```
+
+If we use all the data to check the mean of different trip type, there is a big difference between hail street and dispatch. However, if we control by whether or not pay the tip, there is no difference between hail street and dispatch. It indicates the trip type is a good indicator for classification. The whether or not pay the tip is the confounding variable between tip percentage and trip type. 
+
+**The hours of the day (Pick up time)**
+
+```{r}
+p1 <- box.plot.fun(taxi_clean.3,"hour","tip_pct")
+taxi_clean.3$hour <- as.numeric(taxi_clean.3$hour)
+
+taxi_clean.3$Hour <- as.factor(ifelse((taxi_clean.3$hour<10 & taxi_clean.3$hour>5)|(taxi_clean.3$hour<20 & taxi_clean.3$hour >16),"rush hour", "normal hour") )
+
+p2 <- box.plot.fun(taxi_clean.3[taxi_clean.3$tip_YN=="Yes",],"Hour","tip_pct")
+grid.arrange(p1,p2,ncol=1)
+```
+
+There is variation during a day. But it is not helpful if we take all 24 hours. So we will divide the 24 hours into rush hour and normal hour. For trips between 5 am tp 10 am and 4 pm to 8 pm are defined as rush hour. Others were normal hour. However, the boxplot showed the distribution of the tip percentage between rush hour and normal hour were similiar.
+
+**week of day**
+
+```{r}
+p1 <- box.plot.fun(taxi_clean.3,"weekday","tip_pct")
+taxi_clean.3$wkd<- as.factor(ifelse(taxi_clean.3$weekday=="Sat" | taxi_clean.3$weekday=="Sun","weekend","workday" ))
+p2 <- box.plot.fun(taxi_clean.3[taxi_clean.3$tip_YN=="Yes",],"wkd","tip_pct")
+grid.arrange(p1,p2,nrow=1)
+```
+
+There is not too much variation between workday and weekend. It looks like the tip percentage is not associated with the time of the trip. 
+
+**recodeID**
+
+```{r}
+taxi_clean.3 %>% group_by(RateCodeID) %>% summarise(mean_tip_pct=mean(tip_pct),median_tip_pct=median(tip_pct),count=n())
+
+taxi_clean.3$negotiate <- as.factor(ifelse(taxi_clean.3$RateCodeID==5,"Yes","No"))
+
+taxi_clean.3[taxi_clean.3$tip_YN=="Yes",] %>% group_by(negotiate) %>% summarise(negotiate_mean=mean(tip_pct),negotiate_median=median(tip_pct),count=n())
+
+taxi_clean.3 %>% group_by(negotiate) %>% summarise(negotiate_mean=mean(tip_pct),negotiate_median=median(tip_pct),count=n())
+
+box.plot.fun(taxi_clean.3[taxi_clean.3$tip_YN=="Yes",],"negotiate","tip_pct")
+
+```
+
+The negotiate fare always has low tip percentage than other four types. It shows similar effect like trip type. If I controlled for tip payer, then the difference only 0.03. But if I didn't control, it is about 10%. It is a good predictor for whether or not a tip payer but may not be a good for tip percentage. 
+
+**NYC boroughs**
+
+```{r}
+taxi_clean.3$boroughs <- as.factor(ifelse(taxi_clean.3$Pickup_longitude > -74.0479 & taxi_clean.3$Pickup_longitude < -73.9067 &
+                                  taxi_clean.3$Pickup_latitude > 40.6829 & taxi_clean.3$Pickup_latitude < 40.8820,"Manhattan",
+                                  ifelse(taxi_clean.3$Pickup_longitude > -73.9630 & taxi_clean.3$Pickup_longitude < -73.7004 &
+                                    taxi_clean.3$Pickup_latitude > 40.5431 & taxi_clean.3$Pickup_latitude < 40.8007,"queens",
+                                  ifelse(taxi_clean.3$Pickup_longitude > -74.0421 & taxi_clean.3$Pickup_longitude < -73.8334 &
+                                    taxi_clean.3$Pickup_latitude > 40.5707 & taxi_clean.3$Pickup_latitude < 40.7395,"brooklyn","other"
+                                  ))))
+
+taxi_clean.3[taxi_clean.3$tip_YN=="Yes",] %>% group_by(boroughs) %>% summarise(boroughs_mean=mean(tip_pct),boroughs_median=median(tip_pct),count=n())
+
+taxi_clean.3[taxi_clean.3$tip_YN=="Yes",] %>% group_by(boroughs) %>% summarise(boroughs_mean=mean(tip_pct),boroughs_median=median(tip_pct),count=n())
+
+```
+
+The mean and median tip percentage are varied among different boroughs if we don't control for tip payer. However, among the people who paid the tip, the mean and median is similiar across different boroughs. The GIS coordination location was found online[`link`](https://www.kaggle.com/aiswaryaramachandran/eda-and-feature-engineering).
+
+**Airport area related**
+
+```{r}
+table(`Airport area`=taxi_clean.3$airport_GIS,`tip trip`=taxi_clean.3$tip_YN)
+
+taxi_clean.3[taxi_clean.3$tip_YN=="Yes",] %>% group_by(airport_GIS) %>% summarise(mean_tip_pct=mean(tip_pct),median_tip_pct=median(tip_pct),count=n())
+
+box.plot.fun(taxi_clean.3[taxi_clean.3$tip_YN=="Yes",],"airport_GIS","tip_pct")
+```
+
+The trip percentage didn't show lots of variation between airport and non-airport trip. 
+
+**Trip_distance**
+
+```{r}
+p1 <- taxi_clean.3 %>% ggplot(aes(x=Trip_distance,y=tip_pct))+geom_point()+theme_bw()
+taxi_clean.3 %>% group_by(tip_YN) %>% summarise(mean_trip_dis=mean(Trip_distance),median_trip_dis=median(Trip_distance),count=n())
+```
+
+From the scatter plot didn't show the trip percentage increase as the trip distance increase. However, it showed that the trip with no tip has lower mean trip distance than tip trip.
+
+**Trip Duration**
+
+```{r}
+taxi_clean.3$trip_duration<-as.numeric(difftime(taxi_clean.3$drop_time,taxi_clean.3$Pickup_time,units = "min"))
+p2 <- taxi_clean.3[taxi_clean.3$tip_YN=="Yes",] %>% ggplot(aes(x=trip_duration,y=tip_pct))+geom_point()+theme_bw()
+taxi_clean.3 %>% group_by(tip_YN) %>% summarise(mean_tip_dis=mean(trip_duration),median_tip_dis=median(trip_duration),count=n())
+grid.arrange(p1,p2,nrow=1)
+```
+
+The trip duration and trip distance show similiar property of tip percentage. 
+
+### Conclusion
+
+The intial variables will be used for model are trip_type, VendorID, num_passenger("1~3",4~8"), boroughs,airport_GIS,Weekday (weekday or weekend),negotiate (yes and no),Trip_distance,trip duration,Hour (rush hour and normal hour). The outcome are tip_YN (whether or not paid the tip) and tip_pct (the percentage of the tip)
+
+### Variable Selection
+
+From the histogram, the tip percentage has lots of zero. If we exclude the zero, the distribution is approximately normal distirbuted. In the following, I will use two stage model to predict the tip percentage. The first is classification model which predict if the passenger will pay the tip. If it is yes, then the second regression model will predict what is the percentage. I used two approaches. One is logistic regression combined with linear regression. The second one is classification random forest and regression forest. 
+
+I played around a little bit before documentation. I used logistic regression first with all the variable. However, the trip type is not significant so I removed from final model. All the other variables are significant. Later I tried random forest, it showed the Hour, Week of day and number of passenger, fare amount are not important. Removing these variables variables not increase error rate. But it will reduce the complexity. In the code, I didn't show the work since it took a long time to run, especially random forest. Also, since it is two stage model, the predictors were different between classification and regression. I used dynamically feature engineering way to create vendor ID mean and boroughs mean to substitute category variable in classoficiation model.
+
+**The final variables are :VendorID (vendor id mean), boroughs (boroughs mean), negotiate, airport_GIS, trip_duration**
+
+## Model Building 
+
+### Logistic regression with linear regression
+
+I used logistic regression combined with linear regression to predict the model. If the probability of the subject paying the tip is greater than 0.5, it will be treated as tip payer. The linear model will predict the tip percentage of these subjects. Also, the new feature like negotiate level tip percentage and trip type tip percentage will be generated. It will help to build the regression model. 
+
+The second model is linear regression and we assume the distribution of the tip percentage is normal. If the prediction is negative, we will treat it as 0. I was thinking using more generalized linear model like gamma distribution, but the challenge is the first classification has prediction error. Some subjects were predicted as tip payer however they didn't pay the tip. The gamma distribution only for non-zero outcome. It is hard to adjust for that. 
+
+I sufferred from computational power. In order to generate report on time, I ramdomly sampled 50% of the data to build the model and check the assumption and colliearity. But the cross validation error were calculated using all the data divided into five folders and each folder will be used as the test data set.
+
+```{r}
+set.seed(1)
+sample <- sample(dim(taxi_clean.3)[1],dim(taxi_clean.3)[1]*0.01)
+sample.data <- taxi_clean.3[sample,]
+
+glm.fit<-glm(tip_YN~VendorID+boroughs+negotiate+airport_GIS+trip_duration+Trip_type+Trip_distance,data=sample.data,family=binomial)
+glm.pred <- predict(glm.fit,sample.data,type="response")
+glm.result <- rep(0,nrow(sample.data))
+glm.result[glm.pred >= 0.5] <- "Yes"
+test.nonzero <- sample.data[glm.result=="Yes",]
+test.nonzero <- data.table(test.nonzero)
+test.nonzero[,negotiate_mean:=mean(tip_pct),by="negotiate"]
+test.nonzero[,VendorID_mean:=mean(tip_pct),by="VendorID"]
+test.nonzero[,boroughs_mean:=mean(tip_pct),by="boroughs"]
+lm.fit <- glm(tip_pct~negotiate_mean+VendorID_mean+boroughs_mean+airport_GIS+trip_duration+
+                  Trip_distance,data=test.nonzero)
+```
+
+### Check Assumption 
+  
+```{r}
+par(mfrow = c(2,2))    
+plot(lm.fit)
+par(mfrow = c(1,1))   
+hist(lm.fit$residuals,100)
+```
+
+**1. Linearity of the data**: The relationship between the predictor (x) and the outcome (y) is assumed to be linear. The residual and fitted plot was used to detect the linearity between the predictor and outcome. It should be a horizontal line, without distinct patterns is an indication for a linear relationship. In my case, the residual plot shows a cone like pattern especially the residuals below the 0. It could due to lots of 0 values. 
+
+**2. Normality of residuals**: The residual errors are assumed to be normally distributed. The residual histograms and Q-Q plot were used to check that assumption. It is good if the residuals follow the straight dash line. In my case, The Q-Q plot shows that majority of the points were on the diagonal line. There are some violation and deviation. The histogram also shows there is a peak below 0.
+
+**3. Homogeneity of residuals variance**: The residuals are assumed to have a constant variance (homoscedasticity). The scale-location plot was used to check the homoscedasticity. Horizontal line with equally spread points is a good indication of homoscedasticity. However, the plot didn't show this exactly horizontal line. There is a deviation.
+
+**4. Independence of residuals error terms**.
+
+It is also checked by plotting the residuals versus fitted values. If the residuals error was independence, no matter what the fitted values are, the residual was always around the horizontal line. The line is fairly straight. 
+
+In conclusion, the linear assumption is not exactly met. It indicates the result should be explained with caution. I would like to use gamma distribution but gamma is not validate for non-zero value prediction. But linear regression is very efficient and easy to explain. 
+
+### Check collinearity
+
+```{r}
+vif(lm.fit)
+```
+
+The negotiate_mean and trip type have really high collinearity. The VIF number for both of them is around 11. I removed the trip type and the collinearity dropped. 
+
+### Model Evaluation (Cross Validation)
+
+In order to give accurate model evalution. I use cross-validation to calculate the relative absolute error for tip trip and absolute error for non-tip trip. 
+
+Because our outcome variable is a percentage which is less than 1, using root mean square error will not accurately refelect the difference. I used mean relative absolute error for non zero values which are showed in the following equations. For the zero values, this equation will generate infinite values, I used mean absolute error. Five fold cross validation were used.
+
+Relative Absolute value:
+
+$$Relative \ Aboslute \ Error=\frac{|y-\hat{y}|}{y}$$
+
+$$Aboslute \ Error=|y-\hat{y}|$$
+
+
+```{r}
+prediction <- function(train.data,test.data){
+glm.fit<-glm(tip_YN~VendorID+boroughs+negotiate+airport_GIS+trip_duration+
+               Trip_distance,data=train.data,family=binomial)
+glm.pred <- predict(glm.fit,test.data,type="response")
+glm.result <- rep(0,nrow(test.data))
+glm.result[glm.pred > 0.5] <- "Yes"
+c <- mean(glm.result==test.data$tip_YN)
+test.data[glm.result==0,"tip_pred"] <- 0
+test.zero <- test.data[test.data$tip_pred==0 &!is.na(test.data$tip_pred),] 
+test.nonzero <- test.data[glm.result=="Yes",]
+test.nonzero <- data.table(test.nonzero)
+test.nonzero[,negotiate_mean:=mean(tip_pct),by="negotiate"]
+test.nonzero[,VendorID_mean:=mean(tip_pct),by="VendorID"]
+test.nonzero[,boroughs_mean:=mean(tip_pct),by="boroughs"]
+lm.fit <- glm(tip_pct~negotiate_mean+VendorID_mean+boroughs_mean+airport_GIS+trip_duration+
+                Trip_distance,data=test.nonzero)
+lm.pred <- predict(lm.fit,test.nonzero)
+test.nonzero$tip_pred <- lm.pred
+test.nonzero$tip_pred <-ifelse(test.nonzero$tip_pred<0,0,test.nonzero$tip_pred)
+test.nonzero <- subset(test.nonzero, select = -c(negotiate_mean,VendorID_mean,boroughs_mean) )
+df <- rbind(as.data.frame(test.nonzero),as.data.frame(test.zero))
+a <- mean(abs(df$tip_pct[df$tip_pct!=0]-df$tip_pred[df$tip_pct!=0])/df$tip_pct[df$tip_pct!=0],na.rm = T)*100
+b <- mean(abs(df$tip_pred[df$tip_pct==0]))*100
+#c <- mean(abs(data$tip_pct-data$tip_pred))*100
+df <- c(a,b,c)
+}
+
+```
+
+
+```{r}
+cv.test.error <- function(data,N){
+folds <- cut(seq(1,nrow(data)),breaks=N,labels=FALSE)
+relative.test.error <- rep(0,N)
+absolute.test.error <- rep(0,N)
+classfication.accuracy <- rep(0,N)
+for(i in 1:N){
+  testIndexes <- which(folds==i,arr.ind=TRUE)
+  trainData <- data[testIndexes, ]
+  testData <- data[testIndexes, ]
+  relative.test.error[i] <- prediction(trainData,testData)[1]
+  absolute.test.error[i] <- prediction(trainData,testData)[2]
+  classfication.accuracy[i] <- prediction(trainData,testData)[3]
+}
+df <- data.frame(`Average Relative Absolute Error (non-zero) %)`=mean(relative.test.error), 
+                 `Avereage Absolute Error`=mean(absolute.test.error),
+`classfication accuracy`=mean(classfication.accuracy),check.names = F)
+return(df)
+}
+
+cv.test.error(taxi_clean.3,5)
+```
+
+The average relative absolute error and average absolute error were showed in the above table.
+
+### Baseline Mean Estimation
+
+```{r}
+mean.estimation.relative.risk <- round(mean(abs(taxi_clean.3$tip_pct[taxi_clean.3$tip_pct!=0]-mean(taxi_clean.3$tip_pct))/taxi_clean.3$tip_pct[taxi_clean.3$tip_pct!=0]),3)
+
+mean.estimation.abs.error <- round(abs(mean(taxi_clean.3$tip_pct)),3)
+
+```
+
+### Conclusion
+
+The average relative absolute error for non-zero tip trip is around 83% and for zero trip the average absolute error is 18.4%. The classification accuracy is 86.7%.
+
+If we don't use any model just use mean to estimate, the mean estimation absolute error is `r mean.estimation.abs.error` and The average relative absolute error for non-zero tip trip is `r mean.estimation.relative.risk`. The model gives better estimation by reducing the error 6% for tip trip and 2% for non-tip trip.  
+
+### Random Forest (classification and regression)
+
+```{r}
+set.seed(1)
+sample <- sample(dim(taxi_clean.3)[1],dim(taxi_clean.3)[1]*0.1)
+taxi.sample <- taxi_clean.3[sample,]
+train <- sample(dim(taxi.sample)[1],dim(taxi.sample)[1]*0.7)
+train.data <- taxi.sample[train,]
+test.data <- taxi.sample[-train,]
+
+taxi_clean.3$airport_GIS <- as.factor(taxi_clean.3$airport_GIS)
+rft.tip <- randomForest(tip_YN~VendorID+boroughs+negotiate+airport_GIS+trip_duration+Trip_type+
+                          Trip_distance,data=train.data,importance=T)
+rf.pred <- predict(rft.tip,test.data)
+test.data[rf.pred=="No","tip_pred"] <- 0
+classification.accuracy <- mean(rf.pred==test.data$tip_YN)
+
+tip.data <- test.data[test.data$tip_pred==0 & !is.na(test.data$tip_pred),]
+
+rft.reg <- test.data[rf.pred=="Yes",]
+rft.tip <- randomForest(tip_pct~VendorID+boroughs+negotiate+airport_GIS+trip_duration+Trip_type+
+                          Trip_distance,data=rft.reg,importance=T)
+importance(rft.tip)
+varImpPlot(rft.tip)
+rf.pred <- predict(rft.tip,rft.reg)
+rft.reg$tip_pred <- rf.pred 
+df <- rbind(rft.reg,tip.data)
+relative_absolute_error <- mean(abs(df$tip_pct[df$tip_pct!=0]-df$tip_pred[df$tip_pct!=0])/df$tip_pct[df$tip_pct!=0],na.rm = T)*100
+absolute_error <- mean(abs(df$tip_pred[df$tip_pct==0]))*100
+
+```
+
+### Conclusion
+
+Random forest is very computation intensive. I didn't use cross-validation to generate the test error. Also, I randomly subset 10% of the data to demonstrate the model prediction power. It seems there is no significant improvement of the model performance. So linear model and logistic regression model is my final model.
+
+## Summary
+
+The two stage model using logistic regression as a classification and linear regression as regression model was used to predict the new york taxi tip percentage. Since the outcome is a small number, I used absolute relative risk error for tip trip and absolute error for non-tip trip. The model performs better than mean estimation by decreasing the absolute relative risk error 6% and  absolute error 2%. The five-fold cross-validation was used to estimate the test error. The assumption was test for linear regression.
+
+# Visualization (Q5 R shiny App)
+
+*Can you build a visualization (interactive or static) of the trip data that helps us understand intra- vs. inter-borough traffic? What story does it tell about how New Yorkers use their green taxis?*
+
+In the Rshiny app which is a sepearte file in the zip folder. It allows user to select and compare the traffic among different boroughs and within borough. 
+
+If you select the inter borough button, in the drop down menu, choose your interested route or time. There are three choices: average trip time, week or hour. Average trip time shows in a typical day, the mean trip time in different boroughs. If you select hour, you can see the line plot shows that how the traffic varied in a day across four boroughs. They are very busy around 9-10 am and 6-8 pm. Brooklyn, Queen and Manhattan remains high even after 8 pm. For the weekday, Monday has a lighter traffic compared to other days. During Wednesday, the traffic is very heavy.
+
+If you select the intra borough, the drop down menu will automatically change to borough names. You can select the borough you interested. It will give you the traffic information in a day, a week. Also, it will give you the average time for a trip during a specific hour in a day.
+
+It will help user to quick look and compare the traffic between boroughs and within the boroughs. 
+
+# Limitation
+
+The data set is very large. Although I only use 50% of the data, it turns really slow and always crash if I run random forest or just try to visualize the pick and drop off location. Due to computational power,  I only random selected limited observations since it was efficient to run.  If I have a server or with GPU, I will deep dive into random forest, xgboost and create a direction of each trip. If extra time allowed, I will use external data to identify some abnormal pickup and drop off locations.
+
+
+
+
+
+
+
+
+
+
